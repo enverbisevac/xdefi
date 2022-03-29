@@ -7,27 +7,20 @@ import (
 	"log"
 )
 
-const (
-	SignEvent = "SignEvent"
-)
-
 type Queue struct {
 	producer sarama.SyncProducer
 	consumer sarama.Consumer
-	done     chan struct{}
 }
 
 func NewQueue(producer sarama.SyncProducer, consumer sarama.Consumer) Queue {
 	q := Queue{
 		producer: producer,
 		consumer: consumer,
-		done:     make(chan struct{}),
 	}
 	return q
 }
 
-func (q Queue) PushToQueue(message []byte) error {
-	topic := SignEvent
+func (q Queue) PushToQueue(topic string, message []byte) error {
 	msg := &sarama.ProducerMessage{
 		Topic: topic,
 		Value: sarama.StringEncoder(message),
@@ -40,32 +33,29 @@ func (q Queue) PushToQueue(message []byte) error {
 	return nil
 }
 
-func (q Queue) Start(ctx context.Context) {
-	consumer, err := q.consumer.ConsumePartition(SignEvent, 0, sarama.OffsetOldest)
+func (q Queue) Register(ctx context.Context, topic string) chan string {
+	resultChan := make(chan string, 100)
+	consumer, err := q.consumer.ConsumePartition(topic, 0, sarama.OffsetOldest)
 	if err != nil {
 		panic(err)
 	}
-	log.Println("Consumer started ")
+	log.Printf("Consumer started with topic: %s", topic)
 	go func() {
+		defer close(resultChan)
 		for {
 			select {
 			case err := <-consumer.Errors():
 				fmt.Println(err)
 			case msg := <-consumer.Messages():
 				log.Printf("Received message: | Topic(%s) | Message(%s) \n", msg.Topic, string(msg.Value))
-			case <-q.done:
-				fmt.Println("Consumer done")
-				return
+				resultChan <- string(msg.Value)
 			case <-ctx.Done():
 				fmt.Println("Context done")
 				return
 			}
 		}
 	}()
-}
-
-func (q Queue) Close() {
-	q.done <- struct{}{}
+	return resultChan
 }
 
 func NewProducer(brokersUrl []string) (sarama.SyncProducer, error) {

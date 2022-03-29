@@ -1,0 +1,48 @@
+<html>
+    <head>
+        <title>xDefi task</title>
+    </head>
+    <body>
+        <h1>xDefi task</h1>
+        <div>
+            Message <input id="message"> <button id="sign_button">Sign</button>
+        </div>
+        <div>
+            Websocket <span id="status"></span>
+        </div>
+        <div>
+            Signed message <span id="signed"></span>
+        </div>
+
+        <script>
+            const socket = new WebSocket("ws://" + document.location.host + "/ws");
+            socket.onerror = (error) => {
+                console.error("WebSocket error: ", error);
+            }
+
+            socket.onopen = () => {
+                document.getElementById("status").innerText = "connected";
+            }
+
+            socket.onclose = () => {
+                document.getElementById("status").innerText = "disconnected"
+            }
+
+            socket.onmessage = (msg) => {
+                console.log("MSG", msg.data);
+                document.getElementById("signed").innerText = msg.data;
+            }
+
+            const text = document.getElementById("message")
+
+            document.getElementById("sign_button").onclick = (e) => {
+                fetch("/sign", {
+                    method: "POST",
+                    body: JSON.stringify({
+                        message: text.value
+                    })
+                })
+            }
+        </script>
+    </body>
+</html>

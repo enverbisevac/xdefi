@@ -1,40 +1,59 @@
 package httpx
 
 import (
+	"context"
 	"encoding/json"
 	"github.com/enverbisevac/xdefi/internal/queue"
 	"github.com/enverbisevac/xdefi/pkg/api"
 	"github.com/gorilla/mux"
+	"github.com/gorilla/websocket"
 	"io/ioutil"
+	"log"
 	"net/http"
 )
 
-type Server struct {
-	router *mux.Router
-	queue  queue.Producer
+var upgrader = websocket.Upgrader{
+	ReadBufferSize:  1024,
+	WriteBufferSize: 1024,
 }
 
-func NewServer(router *mux.Router, queue queue.Producer) Server {
-	server := Server{
-		router: router,
-		queue:  queue,
+type Server struct {
+	http.Server
+	router   *mux.Router
+	queue    queue.Queue
+	receiver <-chan string
+	close    chan struct{}
+}
+
+func NewServer(ctx context.Context, router *mux.Router, q queue.Queue) *Server {
+	server := &Server{
+		Server: http.Server{
+			Addr:    ":8087",
+			Handler: router,
+		},
+		router:   router,
+		queue:    q,
+		receiver: q.Register(ctx, queue.SignedEvent),
+		close:    make(chan struct{}),
 	}
 	server.SetupRoutes()
 	return server
 }
 
-func (s Server) SetupRoutes() {
+func (s *Server) SetupRoutes() {
 	s.router.HandleFunc("/health", s.healthHandler)
 	s.router.HandleFunc("/sign", s.signHandler).Methods("POST")
+	s.router.HandleFunc("/ws", s.websocket).Methods("GET")
+	s.router.PathPrefix("/").Handler(http.FileServer(http.Dir("./web/")))
 }
 
-func (s Server) healthHandler(w http.ResponseWriter, r *http.Request) {
+func (s *Server) healthHandler(w http.ResponseWriter, r *http.Request) {
 	response(w, http.StatusOK, map[string]bool{
 		"healthy": true,
 	})
 }
 
-func (s Server) signHandler(w http.ResponseWriter, r *http.Request) {
+func (s *Server) signHandler(w http.ResponseWriter, r *http.Request) {
 	data, err := ioutil.ReadAll(r.Body)
 	if err != nil {
 		response(w, http.StatusBadRequest, api.Error{Detail: err.Error()})
@@ -54,7 +73,7 @@ func (s Server) signHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	err = s.queue.PushToQueue(data)
+	err = s.queue.PushToQueue(queue.SignEvent, data)
 	if err != nil {
 		response(w, http.StatusInternalServerError, api.Error{Detail: err.Error()})
 		return
@@ -63,6 +82,18 @@ func (s Server) signHandler(w http.ResponseWriter, r *http.Request) {
 	response(w, http.StatusAccepted, nil)
 }
 
-func (s Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	s.router.ServeHTTP(w, r)
+func (s *Server) websocket(w http.ResponseWriter, r *http.Request) {
+	upgrader.CheckOrigin = func(r *http.Request) bool { return true }
+	conn, err := upgrader.Upgrade(w, r, nil)
+	if err != nil {
+		return
+	}
+	defer conn.Close()
+
+	for data := range s.receiver {
+		err := conn.WriteMessage(websocket.TextMessage, []byte(data))
+		if err != nil {
+			log.Println(err)
+		}
+	}
 }

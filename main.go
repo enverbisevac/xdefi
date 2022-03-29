@@ -2,15 +2,15 @@ package main
 
 import (
 	"context"
-	"github.com/Shopify/sarama"
 	"github.com/enverbisevac/xdefi/internal/httpx"
 	"github.com/enverbisevac/xdefi/internal/queue/kafka"
+	"github.com/enverbisevac/xdefi/internal/service"
 	"github.com/gorilla/mux"
 	"log"
-	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 )
 
 func main() {
@@ -22,33 +22,34 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	defer func(producer sarama.SyncProducer) {
-		err := producer.Close()
-		if err != nil {
-			log.Println(err)
-		}
-	}(producer)
+	defer producer.Close()
 	consumer, err := kafka.NewConsumer(brokersUrl)
 	if err != nil {
 		log.Fatal(err)
 	}
-	defer func(consumer sarama.Consumer) {
-		err := consumer.Close()
-		if err != nil {
-			log.Println(err)
-		}
-	}(consumer)
+	defer consumer.Close()
+
 	queue := kafka.NewQueue(producer, consumer)
-	queue.Start(ctx)
-	defer queue.Close()
 
 	router := mux.NewRouter()
-	server := httpx.NewServer(router, queue)
+	server := httpx.NewServer(ctx, router, queue)
+
+	signer := service.NewSigner(queue)
+	signer.Start(ctx)
 
 	go func() {
-		log.Fatal(http.ListenAndServe(":8087", server))
+		log.Fatal(server.ListenAndServe())
 	}()
 
 	<-ctx.Done()
 	log.Println("Main done")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	//shutdown the server
+	err = server.Shutdown(ctx)
+	if err != nil {
+		log.Printf("Shutdown request error: %v", err)
+	}
 }
