@@ -90,10 +90,31 @@ func (s *Server) websocket(w http.ResponseWriter, r *http.Request) {
 	}
 	defer conn.Close()
 
-	for data := range s.receiver {
-		err := conn.WriteMessage(websocket.TextMessage, []byte(data))
+	done := make(chan struct{})
+	go func() {
+		for {
+			select {
+			case data := <-s.receiver:
+				err := conn.WriteMessage(websocket.TextMessage, []byte(data))
+				if err != nil {
+					log.Println(err)
+				}
+			case <-done:
+				return
+			}
+		}
+	}()
+
+	// check when websocket get closed
+	for {
+		_, _, err := conn.ReadMessage()
 		if err != nil {
-			log.Println(err)
+			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
+				log.Printf("error: %v", err)
+			}
+			done <- struct{}{}
+			close(done)
+			break
 		}
 	}
 }
