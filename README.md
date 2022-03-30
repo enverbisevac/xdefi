@@ -36,3 +36,6 @@ and to push it on docker hub:
 ```shell
 make push
 ```
+
+open url `http://localhost:8087` or
+health endpoint: `http://localhost:8087/health`
